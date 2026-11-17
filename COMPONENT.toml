@@ -3,12 +3,12 @@ name = "SigmaOS-task-manager"
 tier = 2
 stability = "scaffold"
 language = "rust"
-description = "task-manager component"
+description = "Task manager component for SigmaOS"
 upstream = []
 
 [contract]
 provides = ["component"]
-depends_on = []
+depends_on = ["SigmaOS-system"]
 
 [maturity]
 status = "Scaffold"
