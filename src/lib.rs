@@ -122,3 +122,160 @@ impl Component {
         self.name
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task-manager service: manages a set of tasks with explicit lifecycle.
+// ---------------------------------------------------------------------------
+
+/// Errors for task-manager service operations. Fail-fast on invalid state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskManagerError {
+    /// Service is already running
+    AlreadyRunning,
+    /// Service is not running
+    NotRunning,
+    /// Configuration is invalid
+    InvalidConfig(&'static str),
+    /// No task exists for the requested id
+    TaskNotFound(u64),
+}
+
+impl fmt::Display for TaskManagerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyRunning => write!(f, "service is already running"),
+            Self::NotRunning => write!(f, "service is not running"),
+            Self::InvalidConfig(msg) => write!(f, "invalid configuration: {msg}"),
+            Self::TaskNotFound(id) => write!(f, "no task exists for id {id}"),
+        }
+    }
+}
+impl std::error::Error for TaskManagerError {}
+
+/// Task-manager configuration.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Maximum number of concurrently tracked tasks.
+    pub max_tasks: usize,
+    /// Whether the service records operational events.
+    pub enable_logging: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { max_tasks: 1024, enable_logging: true }
+    }
+}
+
+impl Config {
+    /// Validate and normalize configuration. Fail-fast on invalid values.
+    pub fn process(&self) -> Result<(), TaskManagerError> {
+        if self.max_tasks == 0 {
+            return Err(TaskManagerError::InvalidConfig("max_tasks must be > 0"));
+        }
+        Ok(())
+    }
+}
+
+/// A single managed task.
+#[derive(Debug, Clone)]
+pub struct Task {
+    pub id: u64,
+    pub name: String,
+    pub running: bool,
+}
+
+/// Task-manager service: owns the task table and enforces lifecycle rules.
+pub struct Service {
+    config: Config,
+    running: bool,
+    next_task_id: u64,
+    tasks: BTreeMap<u64, Task>,
+}
+
+impl Service {
+    /// Create a service from validated configuration.
+    pub fn new(config: Config) -> Self {
+        Self { config, running: false, next_task_id: 1, tasks: BTreeMap::new() }
+    }
+
+    /// Whether the service is currently running.
+    pub fn is_running(&self) -> bool { self.running }
+
+    /// Number of tracked tasks.
+    pub fn task_count(&self) -> usize { self.tasks.len() }
+
+    /// Start the service. Fails fast if already running.
+    pub fn start(&mut self) -> Result<(), TaskManagerError> {
+        self.config.process()?;
+        if self.running { return Err(TaskManagerError::AlreadyRunning); }
+        self.running = true;
+        Ok(())
+    }
+
+    /// Stop the service. Fails fast if not running.
+    pub fn stop(&mut self) -> Result<(), TaskManagerError> {
+        if !self.running { return Err(TaskManagerError::NotRunning); }
+        self.running = false;
+        Ok(())
+    }
+
+    /// Spawn a named task. Requires the service to be running.
+    pub fn spawn(&mut self, name: impl Into<String>) -> Result<u64, TaskManagerError> {
+        if !self.running { return Err(TaskManagerError::NotRunning); }
+        if self.tasks.len() >= self.config.max_tasks {
+            return Err(TaskManagerError::InvalidConfig("task table full"));
+        }
+        let id = self.next_task_id;
+        self.next_task_id += 1;
+        self.tasks.insert(id, Task { id, name: name.into(), running: true });
+        Ok(id)
+    }
+
+    /// Stop a task by id. Requires the service to be running.
+    pub fn kill(&mut self, id: u64) -> Result<(), TaskManagerError> {
+        if !self.running { return Err(TaskManagerError::NotRunning); }
+        match self.tasks.get_mut(&id) {
+            Some(t) => { t.running = false; Ok(()) }
+            None => Err(TaskManagerError::TaskNotFound(id)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_start_stop() {
+        let mut s = Service::new(Config::default());
+        assert!(!s.is_running());
+        s.start().unwrap();
+        assert!(s.is_running());
+        s.stop().unwrap();
+        assert!(!s.is_running());
+    }
+
+    #[test]
+    fn double_start_fails() {
+        let mut s = Service::new(Config::default());
+        s.start().unwrap();
+        assert_eq!(s.start(), Err(TaskManagerError::AlreadyRunning));
+    }
+
+    #[test]
+    fn spawn_and_kill_task() {
+        let mut s = Service::new(Config::default());
+        s.start().unwrap();
+        let id = s.spawn("worker").unwrap();
+        assert_eq!(s.task_count(), 1);
+        s.kill(id).unwrap();
+        assert_eq!(s.tasks.get(&id).unwrap().running, false);
+    }
+
+    #[test]
+    fn zero_max_tasks_rejected() {
+        let cfg = Config { max_tasks: 0, enable_logging: false };
+        assert!(cfg.process().is_err());
+    }
+}
