@@ -6,6 +6,8 @@
 //! component isolation, stable API, deterministic tests.
 #![forbid(unsafe_code)]
 
+pub mod sigmataskmanager;
+
 use std::fmt;
 use std::collections::BTreeMap;
 
