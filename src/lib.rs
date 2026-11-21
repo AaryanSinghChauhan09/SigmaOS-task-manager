@@ -281,3 +281,6 @@ mod service_tests {
         assert!(cfg.process().is_err());
     }
 }
+
+/// Module extracted from the SigmaOS-system monolith.
+pub mod task_manager;
